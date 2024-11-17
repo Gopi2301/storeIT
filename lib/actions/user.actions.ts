@@ -1,9 +1,10 @@
 'use server';
-import { createAdminClient } from '@/lib/appwrite';
+import { createAdminClient, createSessionClient } from '@/lib/appwrite';
 import { appwriteConfig } from '@/lib/appwrite/config';
 import { ID, Query } from 'node-appwrite';
 import { parseStringify } from '@/lib/utils';
 import { cookies } from 'next/headers';
+import { avatarPlaceHolder } from '@/constants';
 
 // import {attribute} from "postcss-selector-parser";
 
@@ -21,7 +22,7 @@ const handleError = (error: any, message: string) => {
   throw error;
 };
 
-export const sentEmailOTP = async ({ email }: { email: string }) => {
+export const sendEmailOTP = async ({ email }: { email: string }) => {
   const { account } = await createAdminClient();
   try {
     const session = await account.createEmailToken(ID.unique(), email);
@@ -47,9 +48,22 @@ export const verifySecret = async ({
       sameSite: 'strict',
       secure: true,
     });
+    return parseStringify({ sessionId: session.$id });
   } catch (error) {
     handleError(error, 'Failed to verify OTP');
   }
+};
+
+export const getCurrentUser = async () => {
+  const { databases, account } = await createSessionClient();
+  const result = await account.get();
+  const user = await databases.listDocuments(
+    appwriteConfig.databaseId,
+    appwriteConfig.userscollectionId,
+    [Query.equal('accountId', result.$id)],
+  );
+  if (user.total <= 0) return null;
+  return parseStringify(user.documents[0]);
 };
 // Create Account
 export const createAccount = async ({
@@ -60,7 +74,7 @@ export const createAccount = async ({
   email: string;
 }) => {
   const existingUser = await getUserByEmail(email);
-  const accountId = await sentEmailOTP({ email });
+  const accountId = await sendEmailOTP({ email });
   if (!accountId) throw new Error('Failed to send an OTP');
   if (!existingUser) {
     const { databases } = await createAdminClient();
@@ -71,11 +85,25 @@ export const createAccount = async ({
       {
         fullName,
         email,
-        avatar:
-          'https://th.bing.com/th/id/OIP.ggX8e6U3YzyhPvp8qGZtQwHaHa?w=196&h=196&c=7&r=0&o=5&pid=1.7',
+        avatar: avatarPlaceHolder,
         accountId,
       },
     );
     return parseStringify({ accountId });
+  }
+};
+export const signInUser = async ({ email }: { email: string }) => {
+  try {
+    const existingUser = await getUserByEmail(email);
+
+    // User exists, send OTP
+    if (existingUser) {
+      await sendEmailOTP({ email });
+      return parseStringify({ accountId: existingUser.accountId });
+    }
+
+    return parseStringify({ accountId: null, error: 'User not found' });
+  } catch (error) {
+    handleError(error, 'Failed to sign in user');
   }
 };
